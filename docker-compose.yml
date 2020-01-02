@@ -1,0 +1,65 @@
+version: '2.4'
+services:
+  producer:
+    build:
+      context: ./producer
+      dockerfile: Dockerfile
+    networks:
+      - rabbit
+    # restart: always
+  us-east-1:
+    depends_on: 
+      - rabbitmq
+    build:
+      context: .
+      dockerfile: getter.Dockerfile
+    networks:
+      - rabbit
+    environment:
+      - QOS=1000
+      - Q_NAME=us-east-1
+      - EXCHANGE_NAME=domains
+      - ROUTING_KEY=us-east-1
+  us-east-2:
+    depends_on: 
+      - rabbitmq
+    build:
+      context: .
+      dockerfile: getter.Dockerfile
+    networks:
+      - rabbit
+    environment:
+      - QOS=50
+      - Q_NAME=us-east-2
+      - EXCHANGE_NAME=domains
+      - ROUTING_KEY=us-east-2
+  us-west-2:
+    depends_on: 
+      - rabbitmq
+    build:
+      context: .
+      dockerfile: getter.Dockerfile
+    networks:
+      - rabbit
+    environment:
+      - QOS=50
+      - Q_NAME=us-west-2
+      - EXCHANGE_NAME=domains
+      - ROUTING_KEY=us-west-2
+  rabbitmq:
+    image: 'bitnami/rabbitmq:3.8'
+    ports:
+      - '4369:4369'
+      - '5672:5672'
+      - '25672:25672'
+      - '15672:15672'
+    volumes:
+      - 'rabbitmq_data:/bitnami'
+    networks:
+      - rabbit
+    environment:
+      - RABBITMQ_DISK_FREE_LIMIT='{mem_relative, 0.5}'
+volumes:
+  rabbitmq_data:
+networks:
+  rabbit:
