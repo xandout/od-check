@@ -6,6 +6,8 @@ services:
       dockerfile: Dockerfile
     networks:
       - rabbit
+    volumes:
+      - ./producer/million.csv:/go/src/app/million.csv
     # restart: always
   us-east-1:
     depends_on: 
@@ -15,37 +17,46 @@ services:
       dockerfile: getter.Dockerfile
     networks:
       - rabbit
+    scale: 1
     environment:
-      - QOS=1000
+      - QOS=1
+      - MAX_WORKERS=100
       - Q_NAME=us-east-1
       - EXCHANGE_NAME=domains
       - ROUTING_KEY=us-east-1
-  us-east-2:
-    depends_on: 
-      - rabbitmq
-    build:
-      context: .
-      dockerfile: getter.Dockerfile
-    networks:
-      - rabbit
-    environment:
-      - QOS=50
-      - Q_NAME=us-east-2
-      - EXCHANGE_NAME=domains
-      - ROUTING_KEY=us-east-2
-  us-west-2:
-    depends_on: 
-      - rabbitmq
-    build:
-      context: .
-      dockerfile: getter.Dockerfile
-    networks:
-      - rabbit
-    environment:
-      - QOS=50
-      - Q_NAME=us-west-2
-      - EXCHANGE_NAME=domains
-      - ROUTING_KEY=us-west-2
+      - AMQP_URL=amqp://user:bitnami@rabbitmq:5672/
+  # us-east-2:
+  #   depends_on: 
+  #     - rabbitmq
+  #   build:
+  #     context: .
+  #     dockerfile: getter.Dockerfile
+  #   networks:
+  #     - rabbit
+  #   scale: 1
+  #   environment:
+  #     - QOS=1
+  #     - MAX_WORKERS=100
+  #     - Q_NAME=us-east-2
+  #     - EXCHANGE_NAME=domains
+  #     - ROUTING_KEY=us-east-2
+  #     - AMQP_URL=amqp://user:bitnami@rabbitmq:5672/
+  # us-west-2:
+  #   depends_on: 
+  #     - rabbitmq
+  #   build:
+  #     context: .
+  #     dockerfile: getter.Dockerfile
+  #   networks:
+  #     - rabbit
+  #   scale: 1
+  #   environment:
+  #     - QOS=1
+  #     - MAX_WORKERS=100
+  #     - Q_NAME=us-west-2
+  #     - EXCHANGE_NAME=domains
+  #     - ROUTING_KEY=us-west-2
+  #     - AMQP_URL=amqp://user:bitnami@rabbitmq:5672/
   rabbitmq:
     image: 'bitnami/rabbitmq:3.8'
     ports:

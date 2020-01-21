@@ -2,19 +2,21 @@ package main
 
 import (
 	"context"
-	"strconv"
-	"fmt"
 	"crypto/tls"
-	"net/http"
-	"time"
 	"net/http/httptrace"
+	"time"
+	"net/http"
+	"fmt"
+	"sync"
+
 	"os"
+	"strconv"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/streadway/amqp"
 
 	"github.com/assembla/cony"
-
+	"github.com/xandout/od-check/htrace"
 )
 
 func MustGetEnv(key string) string {
@@ -25,71 +27,36 @@ func MustGetEnv(key string) string {
 	return v
 }
 
+var  qname, exchange, routingkey, amqpurl string
+
+var qos, workers int
+var startTime time.Time
+var handledMsgs = 0
 func passMsg(data amqp.Delivery) {
+
 	url := fmt.Sprintf("https://%s", string(data.Body))
-	req, _ := http.NewRequest("HEAD", url, nil)
-
-	
-    var start, connect, dns, tlsHandshake time.Time
-
-	var startDur, connectDur, dnsDur, tlsDur time.Duration
-    trace := &httptrace.ClientTrace{
-        DNSStart: func(dsi httptrace.DNSStartInfo) { dns = time.Now() },
-        DNSDone: func(ddi httptrace.DNSDoneInfo) {
-            dnsDur = time.Since(dns)
-			log.Infof("DNS Done: %v\n", dnsDur)
-        },
-
-        TLSHandshakeStart: func() { tlsHandshake = time.Now() },
-        TLSHandshakeDone: func(cs tls.ConnectionState, err error) {
-			tlsDur = time.Since(tlsHandshake)
-            log.Infof("TLS Handshake: %v\n", tlsDur)
-        },
-
-        ConnectStart: func(network, addr string) { connect = time.Now() },
-        ConnectDone: func(network, addr string, err error) {
-			connectDur = time.Since(connect)
-            log.Infof("Connect time: %v\n", connectDur)
-        },
-
-        GotFirstResponseByte: func() {
-			startDur = time.Since(start)
-            log.Infof("Time from start to first byte: %v\n", startDur)
-        },
-    }
-	
-	ctx, cancel := context.WithTimeout(context.Background(), 5 * time.Second)
-	defer cancel()
-    req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace)).WithContext(ctx)
-    start = time.Now()
-	resp, err := http.DefaultTransport.RoundTrip(req)
+	ctr, err := htrace.NewClientTrace(url, "GET")
 	if err != nil {
 		log.Info(err)
 	}
-	log.Info(resp)
-    
+	log.Info(ctr.Influx())
 	data.Ack(false)
 
+	handledMsgs = handledMsgs + 1
+	if handledMsgs%100 == 0 {
+		log.Infof("Handled the %vth message, %v from startup(%v)", handledMsgs, time.Since(startTime).Seconds(), startTime)
+	}
 }
 
-func main() {
-
-	// Construct new client with the flag url
-	// and default backoff policy
-	cli := cony.NewClient(
-		cony.URL("amqp://user:bitnami@rabbitmq:5672/"),
-		cony.Backoff(cony.DefaultBackoff),
-	)
-
-	// Declarations
-	// The queue name will be supplied by the AMQP server
+func consume(cli *cony.Client, wg *sync.WaitGroup) {
+	log.Info("Starting worker")
 	que := &cony.Queue{
-		Name:       MustGetEnv("Q_NAME"),
+		Name:       qname,
 		AutoDelete: false,
 	}
 
 	exc := cony.Exchange{
-		Name:       MustGetEnv("EXCHANGE_NAME"),
+		Name:       exchange,
 		Kind:       "direct",
 		Durable:    true,
 		AutoDelete: false,
@@ -97,7 +64,7 @@ func main() {
 	bnd := cony.Binding{
 		Queue:    que,
 		Exchange: exc,
-		Key:      MustGetEnv("ROUTING_KEY"),
+		Key:      routingkey,
 	}
 	cli.Declare([]cony.Declaration{
 		cony.DeclareQueue(que),
@@ -105,33 +72,60 @@ func main() {
 		cony.DeclareBinding(bnd),
 	})
 
-	qos, err := strconv.Atoi(MustGetEnv("QOS"))
-	if err != nil {
-		log.Fatal("QOS is not a number")
-	}
 
 	// Declare and register a consumer
 	cns := cony.NewConsumer(
 		que,
 		cony.Qos(qos),
 	)
+
+
+	
 	cli.Consume(cns)
 	for cli.Loop() {
 		select {
 		case msg := <-cns.Deliveries():
 			go passMsg(msg)
-			// If when we built the consumer we didn't use
-			// the "cony.AutoAck()" option this is where we'd
-			// have to call the "amqp.Deliveries" methods "Ack",
-			// "Nack", "Reject"
-			//
-			// msg.Ack(false)
-			// msg.Nack(false)
-			// msg.Reject(false)
 		case err := <-cns.Errors():
 			log.Infof("Consumer error: %v\n", err)
 		case err := <-cli.Errors():
 			log.Infof("Client error: %v\n", err)
 		}
 	}
+	wg.Done()
+}
+
+
+func main() {
+	startTime = time.Now()
+	amqpurl = MustGetEnv("AMQP_URL")
+	qname = MustGetEnv("Q_NAME")
+	exchange = MustGetEnv("EXCHANGE_NAME")
+	routingkey = MustGetEnv("ROUTING_KEY")
+	_qos, qerr := strconv.Atoi(MustGetEnv("QOS"))
+	qos = _qos
+	if qerr != nil {
+		log.Fatal(qerr)
+	}
+	workernum, werr := strconv.Atoi(MustGetEnv("MAX_WORKERS"))
+	if werr != nil {
+		log.Fatal(werr)
+	}
+
+	var wg sync.WaitGroup
+	cli := cony.NewClient(
+		cony.URL(amqpurl),
+		cony.Backoff(cony.DefaultBackoff),
+	)
+	if werr != nil {
+		log.Fatal(werr)
+	}
+
+	for i := 1; i <= workernum; i++ {
+		wg.Add(1)
+		go consume(cli, &wg)
+	}
+
+	wg.Wait()
+
 }

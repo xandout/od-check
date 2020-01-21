@@ -64,6 +64,7 @@ func main() {
 	reader := csv.NewReader(bufio.NewReader(csvFile))
 	rand.Seed(time.Now().Unix()) // initialize global pseudo random generator
 
+	i := 0
 	for {
 		line, error := reader.Read()
 		if error == io.EOF {
@@ -71,14 +72,23 @@ func main() {
 		} else if error != nil {
 			log.Fatal(error)
 		}
+		i = i + 1
 
 		region := [...]string{"us-east-1", "us-east-2", "us-west-2"}[rand.Intn(3)]
 		region = "us-east-1"
-		log.Infof("Adding %s to %s", line[2], region)
+		if i%100 == 0 {
+			log.Infof("Added item %v to %v", i, region)
+		}
+		
 
-		go pbl.PublishWithRoutingKey(amqp.Publishing{
+		err := pbl.PublishWithRoutingKey(amqp.Publishing{
 			Body: []byte(line[2]),
 		}, region)
+		if err != nil {
+			log.Infof("Got an AMQP error: %v", err)
+		}
 
 	}
+	log.Infof("Added %v records total", i)
+	cli.Close()
 }
