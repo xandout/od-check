@@ -18,7 +18,9 @@ func NewClientTrace(url string, method string) (ClientTraceResponse, error){
 	ctr := ClientTraceResponse{}
 	ctr.RequestURL = url
 	ctr.RequestMethod = method
-	c := http.Client{}
+	c := http.Client{
+		Timeout: 5 * time.Second,
+	}
 	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
 		return ctr, err
@@ -187,6 +189,7 @@ func NewClientTrace(url string, method string) (ClientTraceResponse, error){
 	}
 
 	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+	
 	ctr.StartTime = time.Now().UnixNano()
 	resp, err := c.Do(req)
 	if err != nil {

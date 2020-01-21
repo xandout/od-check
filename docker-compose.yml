@@ -19,8 +19,8 @@ services:
       - rabbit
     scale: 1
     environment:
-      - QOS=1
-      - MAX_WORKERS=100
+      - QOS=2
+      - MAX_WORKERS=50
       - Q_NAME=us-east-1
       - EXCHANGE_NAME=domains
       - ROUTING_KEY=us-east-1

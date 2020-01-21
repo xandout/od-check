@@ -1,13 +1,9 @@
 package main
 
 import (
-	"context"
-	"crypto/tls"
-	"net/http/httptrace"
-	"time"
-	"net/http"
 	"fmt"
 	"sync"
+	"time"
 
 	"os"
 	"strconv"
@@ -27,17 +23,20 @@ func MustGetEnv(key string) string {
 	return v
 }
 
-var  qname, exchange, routingkey, amqpurl string
+var qname, exchange, routingkey, amqpurl string
 
 var qos, workers int
 var startTime time.Time
 var handledMsgs = 0
+
 func passMsg(data amqp.Delivery) {
 
 	url := fmt.Sprintf("https://%s", string(data.Body))
 	ctr, err := htrace.NewClientTrace(url, "GET")
 	if err != nil {
-		log.Info(err)
+		log.Error(err)
+		data.Nack(false, true)
+		return
 	}
 	log.Info(ctr.Influx())
 	data.Ack(false)
@@ -72,15 +71,12 @@ func consume(cli *cony.Client, wg *sync.WaitGroup) {
 		cony.DeclareBinding(bnd),
 	})
 
-
 	// Declare and register a consumer
 	cns := cony.NewConsumer(
 		que,
 		cony.Qos(qos),
 	)
 
-
-	
 	cli.Consume(cns)
 	for cli.Loop() {
 		select {
@@ -94,7 +90,6 @@ func consume(cli *cony.Client, wg *sync.WaitGroup) {
 	}
 	wg.Done()
 }
-
 
 func main() {
 	startTime = time.Now()
