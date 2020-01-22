@@ -29,13 +29,21 @@ var qos, workers int
 var startTime time.Time
 var handledMsgs = 0
 
-func passMsg(data amqp.Delivery) {
+func passMsg(data amqp.Delivery, pbl *cony.Publisher) {
 
 	url := fmt.Sprintf("https://%s", string(data.Body))
 	ctr, err := htrace.NewClientTrace(url, "GET")
 	if err != nil {
 		log.Error(err)
-		data.Nack(false, true)
+		data.Reject(false)
+		return
+	}
+	pbErr := pbl.PublishWithRoutingKey(amqp.Publishing{
+		Body: []byte(ctr.Influx()),
+	}, routingkey)
+	if pbErr != nil {
+		log.Error(pbErr)
+		data.Reject(true)
 		return
 	}
 	log.Info(ctr.Influx())
@@ -47,7 +55,7 @@ func passMsg(data amqp.Delivery) {
 	}
 }
 
-func consume(cli *cony.Client, wg *sync.WaitGroup) {
+func workerFunc(cli *cony.Client, wg *sync.WaitGroup) {
 	log.Info("Starting worker")
 	que := &cony.Queue{
 		Name:       qname,
@@ -78,16 +86,47 @@ func consume(cli *cony.Client, wg *sync.WaitGroup) {
 	)
 
 	cli.Consume(cns)
+
+	//  START
+	doneQue := &cony.Queue{
+		Name:       fmt.Sprintf("%s_done", qname),
+		AutoDelete: false,
+	}
+
+	doneExc := cony.Exchange{
+		Name:       fmt.Sprintf("%s_done", exchange),
+		Kind:       "direct",
+		Durable:    true,
+		AutoDelete: false,
+	}
+	doneBnd := cony.Binding{
+		Queue:    doneQue,
+		Exchange: doneExc,
+		Key:      routingkey,
+	}
+	cli.Declare([]cony.Declaration{
+		cony.DeclareQueue(doneQue),
+		cony.DeclareExchange(doneExc),
+		cony.DeclareBinding(doneBnd),
+	})
+
+	pbl := cony.NewPublisher(doneExc.Name, "")
+	cli.Publish(pbl)
+
+
+
 	for cli.Loop() {
 		select {
 		case msg := <-cns.Deliveries():
-			go passMsg(msg)
+			go passMsg(msg, pbl)
 		case err := <-cns.Errors():
 			log.Infof("Consumer error: %v\n", err)
 		case err := <-cli.Errors():
 			log.Infof("Client error: %v\n", err)
 		}
 	}
+
+
 	wg.Done()
 }
 
@@ -118,7 +157,7 @@ func main() {
 
 	for i := 1; i <= workernum; i++ {
 		wg.Add(1)
-		go consume(cli, &wg)
+		go workerFunc(cli, &wg)
 	}
 
 	wg.Wait()
